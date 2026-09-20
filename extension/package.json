@@ -1,0 +1,67 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "solarmorph",
+  "title": "Solarmorph",
+  "description": "Control a Dyson Solarcycle Morph lamp over Bluetooth",
+  "icon": "icon.png",
+  "author": "cj",
+  "platforms": ["macOS"],
+  "categories": ["Productivity"],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "lamp",
+      "title": "Lamp Controls",
+      "description": "Show the lamp state and change brightness, colour temperature, modes, and presets",
+      "mode": "view"
+    },
+    {
+      "name": "toggle",
+      "title": "Toggle Lamp",
+      "description": "Switch the lamp on or off",
+      "mode": "no-view"
+    },
+    {
+      "name": "turn-on",
+      "title": "Turn Lamp On",
+      "description": "Switch the lamp on",
+      "mode": "no-view"
+    },
+    {
+      "name": "turn-off",
+      "title": "Turn Lamp Off",
+      "description": "Switch the lamp off",
+      "mode": "no-view"
+    },
+    {
+      "name": "set-brightness",
+      "title": "Set Lamp Brightness",
+      "description": "Set the brightness as a percentage",
+      "mode": "no-view",
+      "arguments": [{ "name": "percent", "placeholder": "0-100", "type": "text", "required": true }]
+    },
+    {
+      "name": "set-temperature",
+      "title": "Set Lamp Colour Temperature",
+      "description": "Set the colour temperature in Kelvin",
+      "mode": "no-view",
+      "arguments": [{ "name": "kelvin", "placeholder": "2700-6500", "type": "text", "required": true }]
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^2.4.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "typescript": "^5.9.0"
+  },
+  "scripts": {
+    "build:native": "./scripts/build-native.sh",
+    "predev": "npm run build:native",
+    "dev": "ray develop",
+    "prebuild": "npm run build:native",
+    "build": "ray build",
+    "typecheck": "tsc --noEmit"
+  }
+}

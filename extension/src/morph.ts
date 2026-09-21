@@ -1,4 +1,12 @@
-import { environment, launchCommand, LaunchType, showHUD, showToast, Toast } from "@raycast/api";
+import {
+  environment,
+  getPreferenceValues,
+  launchCommand,
+  LaunchType,
+  showHUD,
+  showToast,
+  Toast,
+} from "@raycast/api";
 import { execFile } from "node:child_process";
 import path from "node:path";
 
@@ -19,6 +27,15 @@ export interface LampState {
 }
 
 const helper = path.join(environment.assetsPath, "morph");
+
+/** The helper starts a background process that holds the connection for this time. */
+function helperEnvironment(): NodeJS.ProcessEnv {
+  const { keepAlive } = getPreferenceValues<{ keepAlive?: string }>();
+  const seconds = keepAlive ?? "60";
+  return seconds === "0"
+    ? { ...process.env, SOLARMORPH_DIRECT: "1" }
+    : { ...process.env, SOLARMORPH_IDLE: seconds };
+}
 
 // The lamp accepts one connection at a time, so calls go one after the other.
 let queue: Promise<unknown> = Promise.resolve();
@@ -47,7 +64,8 @@ export class HelperError extends Error {
 export function helperCall<T>(args: string[], input?: object): Promise<T> {
   return new Promise((resolve, reject) => {
     // The helper retries the connection itself, so the timeout is generous.
-    const child = execFile(helper, ["--json", ...args], { timeout: 60_000 }, (error, stdout, stderr) => {
+    const options = { timeout: 60_000, env: helperEnvironment() };
+    const child = execFile(helper, ["--json", ...args], options, (error, stdout, stderr) => {
       try {
         const reply = JSON.parse(stdout);
         if (!error && reply.error === undefined) {

@@ -67,10 +67,48 @@
       ]
     },
     {
+      "name": "disconnect",
+      "title": "Disconnect Lamp",
+      "description": "Close the Bluetooth connection, so that the MyDyson app can connect to the lamp",
+      "mode": "no-view"
+    },
+    {
       "name": "pair",
       "title": "Pair Lamp",
       "description": "Get the lamp key from your Dyson account. This is necessary one time.",
       "mode": "view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "keepAlive",
+      "title": "Keep the Connection Open",
+      "description": "How long the background process holds the Bluetooth connection after the last command. While it holds the connection, commands are fast, but the MyDyson app cannot connect to the lamp.",
+      "type": "dropdown",
+      "required": false,
+      "default": "60",
+      "data": [
+        {
+          "title": "1 minute",
+          "value": "60"
+        },
+        {
+          "title": "5 minutes",
+          "value": "300"
+        },
+        {
+          "title": "15 minutes",
+          "value": "900"
+        },
+        {
+          "title": "1 hour",
+          "value": "3600"
+        },
+        {
+          "title": "Never (slower commands)",
+          "value": "0"
+        }
+      ]
     }
   ],
   "dependencies": {

@@ -2,7 +2,7 @@ import Foundation
 import MorphCore
 
 let usage = """
-    Usage: morph [--json] [--verbose] <command>
+    Usage: morph [--json] [--verbose] [--direct] <command>
 
       pair [--country SE] [--email you@example.com] [--serial ABC-EU-...]
                           Get the lamp key from the Dyson account (one time)
@@ -21,6 +21,12 @@ let usage = """
           --movement on|off       movement mode
           --daylight on|off       daylight tracking
           --preset study|relax|precision|none
+      daemon [--idle 60]  Keep the lamp connection open between commands, and stop
+                          after this number of idle seconds (or SOLARMORPH_IDLE).
+                          The lamp commands start it themselves. --direct, or
+                          SOLARMORPH_DIRECT=1, does not use it.
+      daemon stop         Stop the daemon and free the lamp
+      daemon status       Show if the daemon is active
     """
 
 var arguments = Array(CommandLine.arguments.dropFirst())
@@ -41,23 +47,9 @@ func takeOption(_ name: String) throws -> String? {
     return value
 }
 
-func onOff(_ value: String, _ name: String) throws -> Bool {
-    switch value.lowercased() {
-    case "on", "1", "true": return true
-    case "off", "0", "false": return false
-    default: throw MorphError.usage("\(name) needs `on` or `off`.")
-    }
-}
-
-func integer(_ value: String, _ name: String, _ range: ClosedRange<Int>) throws -> Int {
-    guard let number = Int(value), range.contains(number) else {
-        throw MorphError.usage("\(name) needs a number from \(range.lowerBound) to \(range.upperBound).")
-    }
-    return number
-}
-
 let json = takeFlag("--json")
 let verbose = takeFlag("--verbose")
+let direct = takeFlag("--direct") || ProcessInfo.processInfo.environment["SOLARMORPH_DIRECT"] == "1"
 
 @MainActor
 func emit<T: Encodable>(_ value: T) {
@@ -89,16 +81,27 @@ func prompt(_ question: String) -> String {
     return (readLine() ?? "").trimmingCharacters(in: .whitespaces)
 }
 
-/// Connect, run `body`, then show the state and disconnect.
+/// Run a lamp command: through the daemon, or with a connection of its own.
 @MainActor
-func withLamp(attributes: Bool = true, _ body: (Lamp) async throws -> Void) async throws {
-    var config = try MorphConfig.load()
-    let lamp = Lamp()
+func runLampCommand(_ command: LampCommand, _ args: [String]) async throws {
     let started = Date()
-    if verbose {
-        lamp.log = { FileHandle.standardError.write(Data(String(format: "  %5.2f s  %@\n", Date().timeIntervalSince(started), $0).utf8)) }
+    let log: (String) -> Void = { message in
+        guard verbose else { return }
+        FileHandle.standardError.write(Data(String(format: "  %5.2f s  %@\n", Date().timeIntervalSince(started), message).utf8))
     }
 
+    if !direct {
+        if let state = try await DaemonClient.run(args) {
+            log("Done through the daemon. Its log is \(DaemonPaths.log)")
+            show(state)
+            return
+        }
+        log("The daemon did not start. Using a direct connection.")
+    }
+
+    var config = try MorphConfig.load()
+    let lamp = Lamp()
+    lamp.log = log
     try await lamp.powerOn()
     let id = try await lamp.connect(
         serial: config.serial, accountId: config.accountId, ltkHex: config.ltk, cachedId: config.peripheralId)
@@ -107,8 +110,7 @@ func withLamp(attributes: Bool = true, _ body: (Lamp) async throws -> Void) asyn
         try? config.save()
     }
     do {
-        try await body(lamp)
-        show(try await lamp.readState(attributes: attributes))
+        show(try await command.run(on: lamp))
     } catch {
         await lamp.disconnect()
         throw error
@@ -232,41 +234,23 @@ func run() async throws {
             }
         }
 
-    case "status":
-        try await withLamp { _ in }
+    case _ where LampCommand.names.contains(command):
+        // Parse before the connection, so that a usage error is immediate.
+        let args = [command] + arguments
+        try await runLampCommand(try LampCommand(arguments: args), args)
 
-    case "on", "off":
-        try await withLamp(attributes: false) { try await $0.setPower(command == "on") }
-
-    case "toggle":
-        try await withLamp(attributes: false) { try await $0.togglePower() }
-
-    case "set":
-        let power = try takeOption("--power").map { try onOff($0, "--power") }
-        let percent = try takeOption("--brightness").map { try integer($0, "--brightness", 0...100) }
-        let lumens = try takeOption("--lumens").map { try integer($0, "--lumens", Limits.lumens) }
-        let kelvin = try takeOption("--kelvin").map { try integer($0, "--kelvin", Limits.kelvin) }
-        let auto = try takeOption("--auto").map { try onOff($0, "--auto") }
-        let movement = try takeOption("--movement").map { try onOff($0, "--movement") }
-        let daylight = try takeOption("--daylight").map { try onOff($0, "--daylight") }
-        let presetName = try takeOption("--preset")?.lowercased()
-        if let presetName, presetName != "none", Preset(rawValue: presetName) == nil {
-            throw MorphError.usage("--preset needs study, relax, precision, or none.")
-        }
-        guard arguments.isEmpty else { throw MorphError.usage("Unknown option: \(arguments[0])") }
-
-        try await withLamp { lamp in
-            if let power { try await lamp.setPower(power) }
-            if let auto { try await lamp.setAutoBrightness(auto) }
-            if let movement { try await lamp.setMovement(movement) }
-            // A preset and daylight mode set brightness and colour temperature,
-            // and a manual value ends them. Thus the manual values go last.
-            if let daylight { try await lamp.setDaylight(daylight) }
-            if let presetName { try await lamp.setPreset(Preset(rawValue: presetName)) }
-            if let target = lumens ?? percent.map(percentToLumens) { try await lamp.setLumens(target) }
-            if let kelvin { try await lamp.setKelvin(kelvin) }
-            // The lamp ramps to a new value. Give it a moment before the read.
-            try await Task.sleep(nanoseconds: 400_000_000)
+    case "daemon":
+        switch arguments.first {
+        case "stop":
+            let stopped = try await DaemonClient.stop()
+            if json { emit(["stopped": stopped]) } else { print(stopped ? "Stopped the daemon." : "No daemon was active.") }
+        case "status":
+            let active = DaemonClient.isRunning
+            if json { emit(["active": active]) } else { print(active ? "The daemon is active." : "The daemon is not active.") }
+        default:
+            let environment = ProcessInfo.processInfo.environment["SOLARMORPH_IDLE"]
+            let idle = try (takeOption("--idle") ?? environment).flatMap(Double.init) ?? 60
+            try await DaemonServer.run(idle: max(idle, 5))
         }
 
     case "help", "--help", "-h":

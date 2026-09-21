@@ -19,10 +19,17 @@ Raycast commands:
 | Toggle Lamp, Turn Lamp on, Turn Lamp off | Switch the lamp without a window. |
 | Set Lamp Brightness | Takes a percentage, 0–100. Also switches the lamp on. |
 | Set Lamp Colour Temperature | Takes a value in Kelvin, 2700–6500. Also switches the lamp on. |
+| Disconnect Lamp | Closes the Bluetooth connection, so that the MyDyson app can connect to the lamp. |
 | Pair Lamp | Gets the lamp key from your MyDyson account. Necessary one time. |
 
-A command takes approximately 2.5 seconds, because each command connects, does
-the handshake, and disconnects. The lamp changes after approximately 1.5 seconds.
+The first command takes approximately 3 seconds, because it connects and does
+the handshake. A background process then holds the connection, and a subsequent
+command takes approximately 0.6 seconds. The process stops after 1 minute
+without a command. The extension preference "Keep the Connection Open" changes
+this time or switches the background process off.
+
+While the background process holds the connection, the MyDyson app cannot
+connect to the lamp. Run **Disconnect Lamp** first, or wait for the idle limit.
 
 ## Status
 
@@ -84,6 +91,12 @@ npm run dev
 
 `npm run dev` builds the Swift helper for your Mac first.
 
+### Update
+
+After a change to the source, `npm run build` is sufficient. After a change to
+`package.json` (a command, a title, or a preference), run `npm run dev` one time
+and stop it. Raycast reads the manifest again only then.
+
 ## Pair the lamp
 
 1. Close the MyDyson app on your phone. The lamp probably accepts only one
@@ -114,14 +127,20 @@ swift build -c release
 .build/release/morph help
 ```
 
-`set` applies all its options in one connection. `--verbose` shows each phase of
-the connection with its time. `scan` lists the Bluetooth LE devices nearby; the
+`set` applies all its options in one connection. The lamp commands start the
+background process themselves. `morph daemon stop` stops it, and `--direct` makes
+one command use its own connection. With `--direct`, `--verbose` shows each phase
+of the connection with its time. The log of the background process is
+`~/.config/solarmorph/daemon.log`. `scan` lists the Bluetooth LE devices nearby; the
 lamp shows with its serial number as its name.
 
 ## Troubleshooting
 
 - **"Could not connect"**: close the MyDyson app, and stop all other systems
   that control the lamp (Homebridge, Home Assistant). Then try again.
+- **"The lamp accepted the connection but did not answer the handshake"**: a
+  different program has the session. On the same Mac, this is frequently a second
+  `morph` process, for example `--direct` while the background process is active.
 - **The lamp refuses all connections** although it shows in `morph scan`: remove
   the power of the lamp for ten seconds. The reference project documents this
   lamp state.
@@ -154,6 +173,12 @@ the key derivation (HKDF-SHA256), the handshake (AES-128-CBC with HMAC-SHA256),
 the message framing, the paced control writes, and the attribute channel for
 daylight mode and presets. `extension/` is a thin layer that runs the helper with
 `--json`.
+
+The background process is the same binary (`morph daemon`). A lamp command
+connects to a Unix socket in `~/.config/solarmorph/`. If no process listens, the
+command starts one. Raycast starts the helper, so the background process uses the
+Bluetooth permission of Raycast and no launchd service is necessary. A process
+from an old build stops when a new build talks to it.
 
 The unit tests (`swift test` in `helper/`) check the crypto and the framing
 against the vectors of the reference implementation.

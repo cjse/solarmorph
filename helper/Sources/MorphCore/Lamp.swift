@@ -47,6 +47,7 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     private var mailbox: [String: Any] = [:]
     private var nextPendingId = 0
 
+    private var authenticated = false
     private var scanTarget: String?
     private var scanResults: [UUID: DiscoveredLamp]?
 
@@ -56,6 +57,12 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         let _: Bool = try await wait("state", timeout: 10) {
             self.central = CBCentralManager(delegate: self, queue: self.queue)
         }
+    }
+
+    /// True between a complete handshake and the end of the connection. The
+    /// daemon uses it to see that the lamp dropped an idle connection.
+    public var isReady: Bool {
+        get async { (try? await onQueue { self.authenticated }) ?? false }
     }
 
     /// List the nearby peripherals that have a name, strongest signal first.
@@ -92,11 +99,11 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         }
 
         log("Scanning for \(serial)")
-        let found: CBPeripheral = try await wait("find", timeout: 20) {
+        let found: CBPeripheral = try await wait("find", timeout: 15) {
             self.scanTarget = serial.uppercased()
             self.central.scanForPeripherals(withServices: nil)
         }
-        if try await connectAndAuthenticate(found, attempts: 4, accountId: accountId, key: key) {
+        if try await connectAndAuthenticate(found, attempts: 3, accountId: accountId, key: key) {
             return found.identifier
         }
         throw MorphError.bluetooth(
@@ -182,7 +189,7 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     }
 
     public func disconnect() async {
-        guard let peripheral else { return }
+        guard let peripheral, peripheral.state != .disconnected else { return }
         let _: Bool? = try? await wait("disconnect", timeout: 3) {
             self.central.cancelPeripheralConnection(peripheral)
         }
@@ -191,6 +198,7 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     // MARK: - Connect and handshake
 
     private func connectAndAuthenticate(_ target: CBPeripheral, attempts: Int, accountId: String, key: Data) async throws -> Bool {
+        var silent = 0
         for attempt in 1...attempts {
             do {
                 let _: Bool = try await wait("connect", timeout: 8) {
@@ -206,12 +214,20 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
             } catch let error as MorphError {
                 // A wrong key does not get better with another attempt.
                 if case .protocolError = error { throw error }
+                if case .timeout(let key) = error, key.hasPrefix("msg:") { silent += 1 }
                 log("Attempt \(attempt) failed: \(error)")
             } catch {
                 log("Attempt \(attempt) failed: \(error.localizedDescription)")
             }
             try? await onQueue { self.central.cancelPeripheralConnection(target) }
             try await Task.sleep(nanoseconds: UInt64(attempt) * 700_000_000)
+        }
+        // The link is good but the lamp does not talk. A scan cannot help, so stop here.
+        // This is what a second program sees while a first one has the session.
+        if silent == attempts {
+            throw MorphError.bluetooth(
+                "The lamp accepted the connection but did not answer the handshake. A different program or device "
+                    + "probably has the session (the MyDyson app, Homebridge, or a second morph process).")
         }
         return false
     }
@@ -234,16 +250,17 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
 
         // Some firmware needs the product-info exchange before it talks auth.
         try await send(MsgType.requestProductInfo)
-        if (try? await message(MsgType.productInfo, timeout: 5)) == nil {
+        if (try? await message(MsgType.productInfo, timeout: 2)) == nil {
             log("No product info returned; continuing with the handshake")
         }
 
         try await send(MsgType.reauthPayloadA, payload: MorphCrypto.buildReauthPayloadA(accountId: accountId, key: key))
-        let payloadB = try await message(MsgType.reauthPayloadB, timeout: 15)
+        let payloadB = try await message(MsgType.reauthPayloadB, timeout: 6)
 
         let challenge = try MorphCrypto.parseReauthPayloadB(key: key, payload: payloadB)
         try await send(MsgType.reauthPayloadC, payload: MorphCrypto.buildReauthPayloadC(key: key, challenge: challenge))
-        _ = try await message(MsgType.connectionEstablished, timeout: 15)
+        _ = try await message(MsgType.connectionEstablished, timeout: 6)
+        try await onQueue { self.authenticated = true }
         log("Handshake complete")
 
         // The attribute channel refuses the subscription before the handshake.
@@ -438,6 +455,7 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     }
 
     public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        authenticated = false
         let waiters = pending
         pending = [:]
         for (key, waiter) in waiters {

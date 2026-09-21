@@ -26,6 +26,8 @@ if [ "${UNIVERSAL:-0}" = "1" ]; then
 fi
 
 swift build "${flags[@]}"
+# A new file, not a write into the old one: a daemon possibly runs from the old file.
+rm -f "$output"
 cp "$(swift build "${flags[@]}" --show-bin-path)/morph" "$output"
 # The Info.plist in the binary is part of the signature, so sign after the copy.
 codesign --force --sign - --identifier local.solarmorph.morph "$output" >/dev/null

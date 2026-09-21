@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-09-21
 
 - A background process holds the Bluetooth connection between commands. A
   command after the first one takes approximately 0.6 seconds, not 2.5 seconds.

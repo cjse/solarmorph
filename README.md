@@ -33,7 +33,7 @@ connect to the lamp. Run **Disconnect Lamp** first, or wait for the idle limit.
 
 ## Status
 
-Version 0.1.0 is an early release. It was tested with one Solarcycle Morph desk
+Version 0.2.0 is an early release. It was tested with one Solarcycle Morph desk
 lamp, on one Mac with Apple silicon.
 
 - Tested on the lamp: the pairing and all the commands.
@@ -99,8 +99,8 @@ and stop it. Raycast reads the manifest again only then.
 
 ## Pair the lamp
 
-1. Close the MyDyson app on your phone. The lamp probably accepts only one
-   connection at a time.
+1. Close the MyDyson app on your phone. The lamp accepts only one session at a
+   time.
 2. Run **Pair Lamp** in Raycast. Enter the country code, the email, and the
    password of your MyDyson account.
 3. Dyson sends a 6-digit code by email. Enter it.

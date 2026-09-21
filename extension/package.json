@@ -5,8 +5,12 @@
   "description": "Control a Dyson Solarcycle Morph lamp over Bluetooth",
   "icon": "icon.png",
   "author": "cj",
-  "platforms": ["macOS"],
-  "categories": ["Productivity"],
+  "platforms": [
+    "macOS"
+  ],
+  "categories": [
+    "Productivity"
+  ],
   "license": "MIT",
   "commands": [
     {
@@ -38,14 +42,34 @@
       "title": "Set Lamp Brightness",
       "description": "Set the brightness as a percentage",
       "mode": "no-view",
-      "arguments": [{ "name": "percent", "placeholder": "0-100", "type": "text", "required": true }]
+      "arguments": [
+        {
+          "name": "percent",
+          "placeholder": "0-100",
+          "type": "text",
+          "required": true
+        }
+      ]
     },
     {
       "name": "set-temperature",
       "title": "Set Lamp Colour Temperature",
       "description": "Set the colour temperature in Kelvin",
       "mode": "no-view",
-      "arguments": [{ "name": "kelvin", "placeholder": "2700-6500", "type": "text", "required": true }]
+      "arguments": [
+        {
+          "name": "kelvin",
+          "placeholder": "2700-6500",
+          "type": "text",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "pair",
+      "title": "Pair Lamp",
+      "description": "Get the lamp key from your Dyson account. This is necessary one time.",
+      "mode": "view"
     }
   ],
   "dependencies": {

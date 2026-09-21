@@ -6,6 +6,9 @@ let usage = """
 
       pair [--country SE] [--email you@example.com] [--serial ABC-EU-...]
                           Get the lamp key from the Dyson account (one time)
+      pair-begin | pair-complete | pair-save
+                          The same pairing in three steps without prompts, for the
+                          Raycast extension. The secrets arrive as JSON on stdin.
       scan [seconds]      List the nearby Bluetooth LE devices that have a name
       status              Show the lamp state
       on | off | toggle   Switch the lamp
@@ -147,10 +150,45 @@ func pair() async throws {
         }
     }
 
-    let ltk = try await cloud.fetchLtk(serial: serial!, token: token)
-    try MorphConfig(serial: serial!, accountId: accountId, ltk: ltk).save()
+    try await storeKey(cloud, serial: serial!, token: token, accountId: accountId)
     // The key is a device credential, so do not print it.
     print("Stored the key for \(serial!) in \(MorphConfig.url.path).")
+}
+
+func storeKey(_ cloud: DysonCloud, serial: String, token: String, accountId: String) async throws {
+    let ltk = try await cloud.fetchLtk(serial: serial, token: token)
+    // The Bluetooth identifier stays correct when the same lamp is paired again.
+    let known = try? MorphConfig.load()
+    let peripheralId = known?.serial == serial ? known?.peripheralId : nil
+    try MorphConfig(serial: serial, accountId: accountId, ltk: ltk, peripheralId: peripheralId).save()
+}
+
+// The pairing steps for the Raycast extension. The password, the one-time code
+// and the token arrive on stdin, because other processes can read an argument list.
+
+struct PairCompleteInput: Decodable {
+    let country, email, password, challengeId, otpCode: String
+}
+
+struct PairSaveInput: Decodable {
+    let country, token, accountId, serial: String
+}
+
+struct PairLight: Encodable {
+    let serial, name: String
+}
+
+struct PairSession: Encodable {
+    let token, accountId: String
+    let lights: [PairLight]
+}
+
+func readInput<T: Decodable>(_ type: T.Type) throws -> T {
+    do {
+        return try JSONDecoder().decode(type, from: FileHandle.standardInput.readDataToEndOfFile())
+    } catch {
+        throw MorphError.usage("This command needs its input as JSON on stdin.")
+    }
 }
 
 @MainActor
@@ -161,6 +199,25 @@ func run() async throws {
     switch command {
     case "pair":
         try await pair()
+
+    case "pair-begin":
+        guard let country = try takeOption("--country"), let email = try takeOption("--email") else {
+            throw MorphError.usage("pair-begin needs --country and --email.")
+        }
+        emit(["challengeId": try await DysonCloud(country: country).beginLogin(email: email)])
+
+    case "pair-complete":
+        let input = try readInput(PairCompleteInput.self)
+        let cloud = DysonCloud(country: input.country)
+        let (token, accountId) = try await cloud.completeLogin(
+            email: input.email, password: input.password, challengeId: input.challengeId, otpCode: input.otpCode)
+        let lights = try await cloud.devices(token: token).filter(\.isBluetoothLight)
+        emit(PairSession(token: token, accountId: accountId, lights: lights.map { PairLight(serial: $0.serial, name: $0.name) }))
+
+    case "pair-save":
+        let input = try readInput(PairSaveInput.self)
+        try await storeKey(DysonCloud(country: input.country), serial: input.serial, token: input.token, accountId: input.accountId)
+        emit(["serial": input.serial])
 
     case "scan":
         let seconds = Double(arguments.first ?? "") ?? 5
@@ -225,7 +282,9 @@ do {
 } catch {
     let message = (error as? MorphError)?.description ?? error.localizedDescription
     if json {
-        emit(["error": message])
+        var reply = ["error": message]
+        if case .notPaired? = error as? MorphError { reply["code"] = "notPaired" }
+        emit(reply)
     }
     FileHandle.standardError.write(Data("\(message)\n".utf8))
     exit(1)

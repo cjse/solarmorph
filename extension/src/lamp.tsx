@@ -1,6 +1,6 @@
-import { Action, ActionPanel, Color, Icon, List, showToast, Toast } from "@raycast/api";
+import { Action, ActionPanel, Color, Icon, launchCommand, LaunchType, List } from "@raycast/api";
 import { useEffect, useState } from "react";
-import { LampState, morph, Preset } from "./morph";
+import { isNotPaired, LampState, morph, Preset, showLampFailure } from "./morph";
 
 const BRIGHTNESS_STEPS = [1, 10, 25, 50, 75, 100];
 const KELVIN_STEPS = [2700, 3000, 3500, 4000, 4500, 5000, 5500, 6000, 6500];
@@ -18,6 +18,7 @@ const onOff = (on?: boolean) =>
 export default function Lamp() {
   const [state, setState] = useState<LampState>();
   const [isLoading, setIsLoading] = useState(true);
+  const [notPaired, setNotPaired] = useState(false);
 
   // `expected` holds the values that were just written. The lamp ramps to a new
   // value, so the value that it reports immediately after a write is not the target.
@@ -32,11 +33,8 @@ export default function Lamp() {
         return { ...attributes, ...next, ...expected };
       });
     } catch (error) {
-      await showToast({
-        style: Toast.Style.Failure,
-        title: "Could not control the lamp",
-        message: error instanceof Error ? error.message : String(error),
-      });
+      setNotPaired(isNotPaired(error));
+      await showLampFailure(error);
     } finally {
       setIsLoading(false);
     }
@@ -59,6 +57,22 @@ export default function Lamp() {
 
   return (
     <List isLoading={isLoading} searchBarPlaceholder="Filter the controls">
+      {notPaired && (
+        <List.EmptyView
+          icon={Icon.Link}
+          title="The lamp is not paired"
+          description="Pair it with your Dyson account one time. After that, all control is local."
+          actions={
+            <ActionPanel>
+              <Action
+                title="Pair Lamp"
+                icon={Icon.Link}
+                onAction={() => launchCommand({ name: "pair", type: LaunchType.UserInitiated })}
+              />
+            </ActionPanel>
+          }
+        />
+      )}
       {state && (
         <>
           <List.Section title="Light">

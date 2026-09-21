@@ -18,6 +18,8 @@ public struct LampCommand {
     public var preset: PresetChange?
     /// on/off/toggle skip the attribute channel. Each question there is a paced round trip.
     public var readsAttributes = true
+    /// `status --fresh`: read the lamp, and not the live copy of the daemon.
+    public var fresh = false
 
     public static let names: Set<String> = ["status", "on", "off", "toggle", "set"]
 
@@ -28,7 +30,10 @@ public struct LampCommand {
 
         switch name {
         case "status":
-            break
+            if let index = options.firstIndex(of: "--fresh") {
+                options.remove(at: index)
+                fresh = true
+            }
         case "on", "off", "toggle":
             power = name == "on" ? .on : name == "off" ? .off : .toggle
             readsAttributes = false
@@ -82,11 +87,18 @@ public struct LampCommand {
         }
         if let lumens { try await lamp.setLumens(lumens) }
         if let kelvin { try await lamp.setKelvin(kelvin) }
-        if lumens != nil || kelvin != nil || daylight != nil || preset != nil {
+        let ramps = lumens != nil || kelvin != nil || daylight != nil || preset != nil
+        if ramps {
             // The lamp ramps to a new value. Give it a moment before the read.
             try await Task.sleep(nanoseconds: 400_000_000)
         }
-        return try await lamp.readState(attributes: readsAttributes)
+        // After a write, read the lamp: it is not known that the lamp sends a
+        // notification for each value that this client wrote. setPower reads the
+        // power itself. With the live state, the attributes come from the reports
+        // of the lamp, so the five characteristics are sufficient here.
+        let wrote = ramps || autoBrightness != nil || movement != nil
+        let live = await lamp.isLive
+        return try await lamp.state(attributes: readsAttributes && !(live && wrote), fresh: fresh || wrote)
     }
 
     static func onOff(_ value: String, _ name: String) throws -> Bool {

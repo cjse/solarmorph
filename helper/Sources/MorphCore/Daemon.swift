@@ -77,27 +77,47 @@ private func withSocketAddress<T>(_ address: sockaddr_un, _ body: (UnsafePointer
     }
 }
 
-private func readLine(from descriptor: Int32) -> Data? {
-    var line = Data()
-    var chunk = [UInt8](repeating: 0, count: 4096)
-    while true {
-        let count = read(descriptor, &chunk, chunk.count)
-        guard count > 0 else { return line.isEmpty ? nil : line }
-        line.append(contentsOf: chunk[0..<count])
-        if let end = line.firstIndex(of: 0x0A) { return line.prefix(upTo: end) }
+/// Reads lines from a socket. A watch connection carries many lines, so the
+/// bytes after a newline stay in the buffer for the next call.
+private struct LineReader {
+    let descriptor: Int32
+    private var buffer = Data()
+
+    init(_ descriptor: Int32) { self.descriptor = descriptor }
+
+    mutating func next() -> Data? {
+        var chunk = [UInt8](repeating: 0, count: 4096)
+        while true {
+            if let end = buffer.firstIndex(of: 0x0A) {
+                let line = Data(buffer.prefix(upTo: end))
+                buffer = Data(buffer.suffix(from: end + 1))
+                return line
+            }
+            let count = read(descriptor, &chunk, chunk.count)
+            guard count > 0 else { return nil }
+            buffer.append(contentsOf: chunk[0..<count])
+        }
     }
 }
 
-private func writeLine(_ data: Data, to descriptor: Int32) {
+/// - Returns: false when the other end is gone.
+@discardableResult
+private func writeLine(_ data: Data, to descriptor: Int32) -> Bool {
     let bytes = [UInt8](data) + [0x0A]
-    bytes.withUnsafeBytes { buffer in
+    return bytes.withUnsafeBytes { buffer in
         var offset = 0
         while offset < buffer.count {
             let count = write(descriptor, buffer.baseAddress! + offset, buffer.count - offset)
-            guard count > 0 else { return }
+            guard count > 0 else { return false }
             offset += count
         }
+        return true
     }
+}
+
+private func setReceiveTimeout(_ descriptor: Int32, seconds: Int) {
+    var timeout = timeval(tv_sec: seconds, tv_usec: 0)
+    setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
 }
 
 // MARK: - Client
@@ -113,8 +133,7 @@ public enum DaemonClient {
             return nil
         }
         // The daemon possibly connects to the lamp first, with its retries.
-        var timeout = timeval(tv_sec: 120, tv_usec: 0)
-        setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        setReceiveTimeout(descriptor, seconds: 120)
         return descriptor
     }
 
@@ -127,7 +146,8 @@ public enum DaemonClient {
     static func exchange(_ args: [String], on descriptor: Int32) throws -> DaemonReply {
         defer { close(descriptor) }
         writeLine(try JSONEncoder().encode(DaemonRequest(build: buildId, args: args)), to: descriptor)
-        guard let line = readLine(from: descriptor) else {
+        var reader = LineReader(descriptor)
+        guard let line = reader.next() else {
             throw MorphError.bluetooth("The daemon closed the connection without a reply. See \(DaemonPaths.log).")
         }
         return try JSONDecoder().decode(DaemonReply.self, from: line)
@@ -189,6 +209,38 @@ public enum DaemonClient {
         }.value
     }
 
+    /// Follow the live state. `onReply` gets the state at the start, then one reply
+    /// for each change, from any source: a command, the MyDyson app, or the lamp itself.
+    /// The daemon does not reach its idle limit while a watch is open.
+    ///
+    /// Returns when the daemon closes the watch.
+    public static func watch(onReply: @escaping @Sendable (DaemonReply) -> Void) async throws {
+        try await Task.detached {
+            for attempt in 1...2 {
+                guard let descriptor = open() ?? start() else {
+                    throw MorphError.bluetooth("The background process did not start. See \(DaemonPaths.log).")
+                }
+                defer { close(descriptor) }
+                // A watch is quiet for as long as the lamp does not change.
+                setReceiveTimeout(descriptor, seconds: 0)
+                writeLine(try JSONEncoder().encode(DaemonRequest(build: buildId, args: ["watch"])), to: descriptor)
+
+                var reader = LineReader(descriptor)
+                var restart = false
+                while let line = reader.next() {
+                    guard let reply = try? JSONDecoder().decode(DaemonReply.self, from: line) else { continue }
+                    if reply.code == "stale", attempt == 1 {
+                        restart = true
+                        break
+                    }
+                    onReply(reply)
+                }
+                guard restart else { return }
+                for _ in 0..<60 where isRunning { usleep(50_000) }
+            }
+        }.value
+    }
+
     /// - Returns: false when no daemon was active.
     public static func stop() async throws -> Bool {
         try await Task.detached {
@@ -201,37 +253,126 @@ public enum DaemonClient {
 
 // MARK: - Server
 
-/// Runs the commands one after the other on one lamp connection.
+/// Runs the commands one after the other on one lamp connection, and sends
+/// the live state to the watchers.
 actor LampSession {
     private let lamp = Lamp()
     private let idle: TimeInterval
+    private let log: (String) -> Void
     private let shutdown: @Sendable () -> Void
     private var poweredOn = false
     private var connectedSerial: String?
-    private var tail: Task<DaemonReply, Never>?
+    private var tail: Task<Void, Never>?
     private var generation = 0
+
+    /// The sockets of the `watch` clients. The session owns them and closes them.
+    private var watchers: Set<Int32> = []
+    private var latest: LampState?
+    private var broadcastPending = false
+    /// True while a live session exists, so that only its loss starts a recovery.
+    private var sessionUp = false
 
     init(idle: TimeInterval, log: @escaping (String) -> Void, shutdown: @escaping @Sendable () -> Void) {
         self.idle = idle
+        self.log = log
         self.shutdown = shutdown
         lamp.log = log
+    }
+
+    func start() {
+        lamp.onStateChange = { [weak self] state in Task { await self?.stateChanged(state) } }
+        lamp.onDisconnect = { [weak self] in Task { await self?.lampDisconnected() } }
     }
 
     /// An actor method can interleave with a second call at each `await`. The
     /// chain makes sure that a command starts only after the previous one ends.
     func submit(_ args: [String]) async -> DaemonReply {
         let previous = tail
-        let task = Task { () -> DaemonReply in
-            _ = await previous?.value
+        let work = Task { () -> DaemonReply in
+            await previous?.value
             return await self.perform(args)
         }
-        tail = task
-        return await task.value
+        // The live state starts after the reply, so that it does not make the
+        // first command slower. The next command waits for it.
+        tail = Task {
+            let reply = await work.value
+            await self.ensureLive(seed: reply.state)
+        }
+        return await work.value
     }
 
     func close() async {
-        _ = await tail?.value
+        await tail?.value
+        for descriptor in watchers { Darwin.close(descriptor) }
+        watchers = []
         await lamp.disconnect()
+    }
+
+    // MARK: Watchers
+
+    func addWatcher(_ descriptor: Int32) async {
+        generation += 1
+        watchers.insert(descriptor)
+        // The reply goes out before the live state starts, so that the list shows fast.
+        // The changes arrive through `stateChanged` when the live state is on.
+        let reply = await submit(["status"])
+        guard watchers.contains(descriptor) else { return }
+        send(reply, to: [descriptor])
+        if reply.state == nil { removeWatcher(descriptor) }
+    }
+
+    func removeWatcher(_ descriptor: Int32) {
+        guard watchers.remove(descriptor) != nil else { return }
+        Darwin.close(descriptor)
+        if watchers.isEmpty { scheduleIdleStop() }
+    }
+
+    private func send(_ reply: DaemonReply, to descriptors: Set<Int32>) {
+        guard let data = try? JSONEncoder().encode(reply) else { return }
+        for descriptor in descriptors where !writeLine(data, to: descriptor) {
+            removeWatcher(descriptor)
+        }
+    }
+
+    /// The lamp sends many notifications while it ramps to a value, so send at most ten states each second.
+    private func stateChanged(_ state: LampState) {
+        latest = state
+        guard !broadcastPending, !watchers.isEmpty else { return }
+        broadcastPending = true
+        Task {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            self.flush()
+        }
+    }
+
+    private func flush() {
+        broadcastPending = false
+        if let latest { send(DaemonReply(state: latest), to: watchers) }
+    }
+
+    private func lampDisconnected() async {
+        guard sessionUp else { return }
+        sessionUp = false
+        guard !watchers.isEmpty else { return }
+        log("The lamp disconnected while a watch was open. Connecting again.")
+        let reply = await submit(["status"])
+        send(reply, to: watchers)
+        if reply.state == nil {
+            for descriptor in watchers { removeWatcher(descriptor) }
+        }
+    }
+
+    // MARK: Commands
+
+    private func ensureLive(seed: LampState?) async {
+        guard await lamp.isReady, !(await lamp.isLive) else { return }
+        do {
+            // A state with the attributes is complete, so it saves the reads.
+            try await lamp.enableLiveState(seed: seed?.daylight != nil ? seed : nil)
+            sessionUp = true
+        } catch {
+            log("The live state did not start: \(error)")
+        }
     }
 
     private func perform(_ args: [String]) async -> DaemonReply {
@@ -267,7 +408,7 @@ actor LampSession {
                     // A connection that the lamp dropped during the idle time shows
                     // as a failure of the first operation. Connect again one time.
                     guard attempt == 1, wasReady, error.isConnectionLoss else { throw error }
-                    lamp.log("The connection was lost (\(error)). Connecting again.")
+                    log("The connection was lost (\(error)). Connecting again.")
                     await lamp.disconnect()
                 }
             }
@@ -282,8 +423,9 @@ actor LampSession {
         let expected = generation
         Task {
             try? await Task.sleep(nanoseconds: UInt64(idle * 1_000_000_000))
-            if self.generation == expected {
-                self.lamp.log("Idle for \(Int(self.idle)) s. Stopping.")
+            // An open watch is use, so the limit applies only after the last watcher left.
+            if self.generation == expected, self.watchers.isEmpty {
+                self.log("Idle for \(Int(self.idle)) s. Stopping.")
                 await self.lamp.disconnect()
                 self.shutdown()
             }
@@ -346,6 +488,7 @@ public enum DaemonServer {
             exit(0)
         }
         let session = LampSession(idle: idle, log: log, shutdown: shutdown)
+        await session.start()
 
         let terminate = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global())
         signal(SIGTERM, SIG_IGN)
@@ -362,9 +505,28 @@ public enum DaemonServer {
                 let client = accept(listener, nil, nil)
                 guard client >= 0 else { continue }
                 Task.detached {
-                    defer { close(client) }
-                    guard let line = readLine(from: client),
-                          let request = try? JSONDecoder().decode(DaemonRequest.self, from: line) else { return }
+                    var reader = LineReader(client)
+                    guard let line = reader.next(),
+                          let request = try? JSONDecoder().decode(DaemonRequest.self, from: line) else {
+                        close(client)
+                        return
+                    }
+                    if request.build == ownBuild, request.args == ["watch"] {
+                        log("→ watch")
+                        await session.addWatcher(client)
+                        // The client sends nothing more, so the end of the read is the end of the
+                        // watch. The wait is on its own thread, because it can be long.
+                        Thread {
+                            var byte: UInt8 = 0
+                            while read(client, &byte, 1) > 0 {}
+                            Task {
+                                await session.removeWatcher(client)
+                                log("A watcher left.")
+                            }
+                        }.start()
+                        return
+                    }
+
                     let reply: DaemonReply
                     var stopAfterReply = false
                     if request.build != ownBuild {
@@ -386,6 +548,7 @@ public enum DaemonServer {
                         await session.close()
                     }
                     if let data = try? JSONEncoder().encode(reply) { writeLine(data, to: client) }
+                    close(client)
                     if stopAfterReply { exit(0) }
                 }
             }

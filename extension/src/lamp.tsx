@@ -1,6 +1,6 @@
 import { Action, ActionPanel, Color, Icon, launchCommand, LaunchType, List } from "@raycast/api";
-import { useEffect, useState } from "react";
-import { isNotPaired, LampState, morph, Preset, showLampFailure } from "./morph";
+import { useEffect, useRef, useState } from "react";
+import { isLiveAvailable, isNotPaired, LampState, morph, Preset, showLampFailure, watchLamp } from "./morph";
 
 const BRIGHTNESS_STEPS = [1, 10, 25, 50, 75, 100];
 const KELVIN_STEPS = [2700, 3000, 3500, 4000, 4500, 5000, 5500, 6000, 6500];
@@ -19,6 +19,9 @@ export default function Lamp() {
   const [state, setState] = useState<LampState>();
   const [isLoading, setIsLoading] = useState(true);
   const [notPaired, setNotPaired] = useState(false);
+  // A new number starts the watch again, after the background process closed it.
+  const [watchRun, setWatchRun] = useState(0);
+  const watching = useRef(false);
 
   // `expected` holds the values that were just written. The lamp ramps to a new
   // value, so the value that it reports immediately after a write is not the target.
@@ -40,9 +43,39 @@ export default function Lamp() {
     }
   }
 
+  // The watch gives the state at the start, then each change: from a command,
+  // from the MyDyson app, or from the buttons on the lamp.
   useEffect(() => {
-    run(["status"]);
-  }, []);
+    if (!isLiveAvailable()) {
+      run(["status"]);
+      return;
+    }
+    watching.current = true;
+    return watchLamp({
+      onState: (next) => {
+        setState(next);
+        setNotPaired(false);
+        setIsLoading(false);
+      },
+      onError: (error) => {
+        setNotPaired(isNotPaired(error));
+        setIsLoading(false);
+        showLampFailure(error);
+      },
+      onEnd: () => {
+        watching.current = false;
+        setIsLoading(false);
+      },
+    });
+  }, [watchRun]);
+
+  // Read the lamp, and not the live copy. Start the watch again if it ended.
+  async function refreshState() {
+    await run(["status", "--fresh"]);
+    if (isLiveAvailable() && !watching.current) {
+      setWatchRun((count) => count + 1);
+    }
+  }
 
   const set = (option: string, value: string, expected?: Partial<LampState>) => run(["set", option, value], expected);
   const flip = (on?: boolean) => (on ? "off" : "on");
@@ -51,7 +84,7 @@ export default function Lamp() {
       title="Refresh"
       icon={Icon.ArrowClockwise}
       shortcut={{ modifiers: ["cmd"], key: "r" }}
-      onAction={() => run(["status"])}
+      onAction={refreshState}
     />
   );
 

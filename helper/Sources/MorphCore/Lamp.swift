@@ -27,6 +27,10 @@ public struct DiscoveredLamp: Codable {
 /// waiter on that queue and the delegate callbacks resolve it.
 public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate, @unchecked Sendable {
     public var log: (String) -> Void = { _ in }
+    /// Called on the Bluetooth queue when a notification changed the live state.
+    public var onStateChange: ((LampState) -> Void)?
+    /// Called on the Bluetooth queue when the connection ends for any reason.
+    public var onDisconnect: (() -> Void)?
 
     private let queue = DispatchQueue(label: "solarmorph.ble")
     private var central: CBCentralManager!
@@ -48,6 +52,8 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     private var nextPendingId = 0
 
     private var authenticated = false
+    /// The live state. nil until `enableLiveState`, and nil again after a disconnect.
+    private var cache: LampState?
     private var scanTarget: String?
     private var scanResults: [UUID: DiscoveredLamp]?
 
@@ -110,6 +116,45 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
             "Could not connect to \(serial). Make sure that no other device holds the connection "
                 + "(MyDyson app, Homebridge). If the lamp refuses all connections, remove its power for ten seconds."
         )
+    }
+
+    /// Subscribe to the state characteristics and keep a copy of the state current.
+    ///
+    /// The attribute channel already reports daylight mode and the presets. From
+    /// here on, `state(fresh: false)` needs no round trip to the lamp.
+    public func enableLiveState(seed: LampState? = nil) async throws {
+        for uuid in LampState.liveCharacteristics {
+            let _: Bool = try await wait("notify:\(uuid)", timeout: 5) {
+                self.peripheral?.setNotifyValue(true, for: try self.characteristic(uuid))
+            }
+        }
+        let initial: LampState
+        if let seed { initial = seed } else { initial = try await readState(attributes: true) }
+        try await onQueue {
+            guard self.authenticated else { return }
+            self.cache = initial
+        }
+        log("The live state is on")
+    }
+
+    public var isLive: Bool {
+        get async { (try? await onQueue { self.cache != nil }) ?? false }
+    }
+
+    /// The state after a command.
+    ///
+    /// - Parameter fresh: read the lamp and not the live copy. Necessary after a
+    ///   write of a value that the lamp ramps to, and for an explicit refresh.
+    public func state(attributes: Bool, fresh: Bool) async throws -> LampState {
+        guard await isLive else { return try await readState(attributes: attributes) }
+        if fresh {
+            // Each read also goes into the live copy, which keeps the attributes that this read skips.
+            _ = try await readState(attributes: attributes)
+        }
+        guard let cached = try await onQueue({ self.cache }) else {
+            throw MorphError.bluetooth("The lamp disconnected.")
+        }
+        return cached
     }
 
     /// - Parameter attributes: also ask for daylight mode and the preset. Each
@@ -456,6 +501,8 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
 
     public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         authenticated = false
+        cache = nil
+        onDisconnect?()
         let waiters = pending
         pending = [:]
         for (key, waiter) in waiters {
@@ -526,16 +573,26 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         case CharUUID.attribute:
             switch decodeAttributeNotification(data) {
             case .value(let attribute, let value):
+                if let value { updateLive { $0.apply(attribute: attribute, value: value) } }
                 deliver("attr:\(attribute)", value ?? Data())
             case .ack(let attribute, let status):
                 deliver("ack:\(attribute)", status)
             case .report(let attribute, let value):
                 log("← attribute 0x\(String(attribute, radix: 16)) changed to \(value.hex)")
+                updateLive { $0.apply(attribute: attribute, value: value) }
             case nil:
                 log("← attribute channel: \(data.hex)")
             }
         default:
+            // A read reply and a notification arrive here in the same way.
+            updateLive { $0.apply(characteristic: uuid, value: data) }
             resolve("read:\(uuid)", data)
         }
+    }
+
+    private func updateLive(_ change: (inout LampState) -> Bool) {
+        guard var state = cache, change(&state) else { return }
+        cache = state
+        onStateChange?(state)
     }
 }

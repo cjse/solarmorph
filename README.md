@@ -15,7 +15,7 @@ Raycast commands:
 
 | Command | What it does |
 | --- | --- |
-| Lamp Controls | Shows the lamp state. Changes brightness, colour temperature, the three modes (daylight tracking, auto brightness, movement), and the three presets (Study, Relax, Precision). |
+| Lamp Controls | Shows the live lamp state, also when you change the lamp with its buttons or with the MyDyson app. Changes brightness, colour temperature, the three modes (daylight tracking, auto brightness, movement), and the three presets (Study, Relax, Precision). |
 | Toggle Lamp, Turn Lamp on, Turn Lamp off | Switch the lamp without a window. |
 | Set Lamp Brightness | Takes a percentage, 0–100. Also switches the lamp on. |
 | Set Lamp Colour Temperature | Takes a value in Kelvin, 2700–6500. Also switches the lamp on. |
@@ -24,8 +24,8 @@ Raycast commands:
 
 The first command takes approximately 3 seconds, because it connects and does
 the handshake. A background process then holds the connection, and a subsequent
-command takes approximately 0.6 seconds. The process stops after 1 minute
-without a command. The extension preference "Keep the Connection Open" changes
+command takes approximately 0.4 seconds. The process stops after 1 minute
+without a command and without an open Lamp Controls list. The extension preference "Keep the Connection Open" changes
 this time or switches the background process off.
 
 While the background process holds the connection, the MyDyson app cannot
@@ -33,7 +33,7 @@ connect to the lamp. Run **Disconnect Lamp** first, or wait for the idle limit.
 
 ## Status
 
-Version 0.2.0 is an early release. It was tested with one Solarcycle Morph desk
+Version 0.3.0 is an early release. It was tested with one Solarcycle Morph desk
 lamp, on one Mac with Apple silicon.
 
 - Tested on the lamp: the pairing and all the commands.
@@ -127,7 +127,10 @@ swift build -c release
 .build/release/morph help
 ```
 
-`set` applies all its options in one connection. The lamp commands start the
+`set` applies all its options in one connection. `watch` shows the state and then
+each change, until Ctrl-C. The background process keeps a live copy of the state
+from the notifications of the lamp, so `status` needs no round trip;
+`status --fresh` reads the lamp. The lamp commands start the
 background process themselves. `morph daemon stop` stops it, and `--direct` makes
 one command use its own connection. With `--direct`, `--verbose` shows each phase
 of the connection with its time. The log of the background process is

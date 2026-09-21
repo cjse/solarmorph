@@ -10,7 +10,9 @@ let usage = """
                           The same pairing in three steps without prompts, for the
                           Raycast extension. The secrets arrive as JSON on stdin.
       scan [seconds]      List the nearby Bluetooth LE devices that have a name
-      status              Show the lamp state
+      status [--fresh]    Show the lamp state. --fresh reads the lamp, and not the
+                          live copy of the background process.
+      watch               Show the state, then each change, until Ctrl-C
       on | off | toggle   Switch the lamp
       set [options]       Change one or more settings in one connection
           --power on|off
@@ -238,6 +240,30 @@ func run() async throws {
         // Parse before the connection, so that a usage error is immediate.
         let args = [command] + arguments
         try await runLampCommand(try LampCommand(arguments: args), args)
+
+    case "watch":
+        guard !direct else { throw MorphError.usage("watch needs the background process, so it does not work with --direct.") }
+        let asJson = json
+        try await DaemonClient.watch { reply in
+            // Write each line immediately. `print` keeps lines in a buffer when stdout is a pipe.
+            let line: String
+            if asJson {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys]
+                let data = reply.state.flatMap { try? encoder.encode($0) }
+                    ?? (try? encoder.encode(["error": reply.error ?? "Unknown error", "code": reply.code ?? ""]))
+                line = String(data: data ?? Data("{}".utf8), encoding: .utf8)!
+            } else if let state = reply.state {
+                func flag(_ on: Bool?) -> String { on.map { $0 ? "on" : "off" } ?? "?" }
+                let time = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+                line = "\(time)  power \(flag(state.power))  \(state.lumens) lm  \(state.kelvin) K  "
+                    + "auto \(flag(state.autoBrightness))  movement \(flag(state.movement))  "
+                    + "daylight \(flag(state.daylight))  preset \(state.preset?.rawValue ?? "none")"
+            } else {
+                line = reply.error ?? "Unknown error"
+            }
+            FileHandle.standardOutput.write(Data((line + "\n").utf8))
+        }
 
     case "daemon":
         switch arguments.first {

@@ -7,7 +7,7 @@ import {
   showToast,
   Toast,
 } from "@raycast/api";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import path from "node:path";
 
 export type Preset = "study" | "relax" | "precision";
@@ -28,10 +28,14 @@ export interface LampState {
 
 const helper = path.join(environment.assetsPath, "morph");
 
-/** The helper starts a background process that holds the connection for this time. */
+/** Seconds that the background process holds the connection. "0" means no background process. */
+const keepAliveSeconds = () => getPreferenceValues<{ keepAlive?: string }>().keepAlive ?? "60";
+
+/** The live state needs the background process. */
+export const isLiveAvailable = () => keepAliveSeconds() !== "0";
+
 function helperEnvironment(): NodeJS.ProcessEnv {
-  const { keepAlive } = getPreferenceValues<{ keepAlive?: string }>();
-  const seconds = keepAlive ?? "60";
+  const seconds = keepAliveSeconds();
   return seconds === "0"
     ? { ...process.env, SOLARMORPH_DIRECT: "1" }
     : { ...process.env, SOLARMORPH_IDLE: seconds };
@@ -79,6 +83,49 @@ export function helperCall<T>(args: string[], input?: object): Promise<T> {
     });
     child.stdin?.end(input === undefined ? "" : JSON.stringify(input));
   });
+}
+
+/**
+ * Follow the live state of the lamp: the state now, then each change from any
+ * source. The background process stays active while the watch is open.
+ *
+ * @returns a function that stops the watch.
+ */
+export function watchLamp(handlers: {
+  onState: (state: LampState) => void;
+  onError: (error: HelperError) => void;
+  onEnd: () => void;
+}): () => void {
+  const child = spawn(helper, ["--json", "watch"], { env: helperEnvironment(), stdio: ["ignore", "pipe", "pipe"] });
+  let buffer = "";
+  let stopped = false;
+
+  child.stdout.on("data", (chunk: Buffer) => {
+    buffer += chunk.toString();
+    let end: number;
+    while ((end = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, end);
+      buffer = buffer.slice(end + 1);
+      if (stopped || !line) continue;
+      try {
+        const reply = JSON.parse(line);
+        if (reply.error !== undefined) {
+          handlers.onError(new HelperError(reply.error, reply.code || undefined));
+        } else {
+          handlers.onState(reply as LampState);
+        }
+      } catch {
+        // Not a complete JSON line. The next line replaces it.
+      }
+    }
+  });
+  child.on("error", (error) => !stopped && handlers.onError(new HelperError(error.message)));
+  child.on("close", () => !stopped && handlers.onEnd());
+
+  return () => {
+    stopped = true;
+    child.kill();
+  };
 }
 
 export const isNotPaired = (error: unknown) => error instanceof HelperError && error.code === "notPaired";

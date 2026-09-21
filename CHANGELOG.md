@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 - 2026-09-21
+
+- The background process follows the notifications of the lamp and keeps a live
+  copy of the state. `status` takes approximately 0.01 seconds, not 0.8 seconds.
+- The Lamp Controls list shows each change immediately, also a change from the
+  buttons on the lamp or from the MyDyson app.
+- `morph watch` shows the state and then each change. `morph status --fresh`
+  reads the lamp and not the live copy.
+
 ## 0.2.0 - 2026-09-21
 
 - A background process holds the Bluetooth connection between commands. A

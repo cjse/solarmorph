@@ -4,7 +4,7 @@
   "title": "Solarmorph",
   "description": "Control a Dyson Solarcycle Morph lamp over Bluetooth",
   "icon": "icon.png",
-  "author": "cj",
+  "author": "cjse",
   "platforms": [
     "macOS"
   ],
@@ -27,13 +27,13 @@
     },
     {
       "name": "turn-on",
-      "title": "Turn Lamp On",
+      "title": "Turn Lamp on",
       "description": "Switch the lamp on",
       "mode": "no-view"
     },
     {
       "name": "turn-off",
-      "title": "Turn Lamp Off",
+      "title": "Turn Lamp off",
       "description": "Switch the lamp off",
       "mode": "no-view"
     },

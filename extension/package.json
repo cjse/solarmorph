@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.raycast.com/schemas/extension.json",
   "name": "solarmorph",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "title": "Solarmorph",
   "description": "Control a Dyson Solarcycle Morph lamp over Bluetooth",
   "icon": "icon.png",

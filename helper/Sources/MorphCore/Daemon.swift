@@ -1,4 +1,5 @@
 import Foundation
+import MachO
 
 // The daemon keeps the lamp connection open between commands, so that a command
 // does not pay for the connect, the discovery, and the handshake each time.
@@ -18,13 +19,32 @@ public enum DaemonPaths {
     public static var log: String { directory.appendingPathComponent("daemon.log").path }
 }
 
-/// Identifies the binary. A daemon from an old build stops when a new build talks to it.
-public let buildId: String = {
+/// Identifies the binary. A daemon from a different build stops when a new build talks to it.
+///
+/// It is the UUID that the linker computes from the content of the binary. A
+/// copy of the same build has the same UUID, also after `codesign` and with a
+/// different file date, so the helper of Raycast and the helper in `.build`
+/// share one daemon.
+public let buildId: String = executableUUID() ?? {
     let path = Bundle.main.executablePath ?? CommandLine.arguments[0]
     let attributes = try? FileManager.default.attributesOfItem(atPath: path)
     let modified = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
     return "\(Int(modified))-\(attributes?[.size] as? Int ?? 0)"
 }()
+
+/// The `LC_UUID` of the main executable, from its Mach-O header in memory.
+func executableUUID() -> String? {
+    guard let header = _dyld_get_image_header(0), header.pointee.magic == MH_MAGIC_64 else { return nil }
+    var command = UnsafeRawPointer(header).advanced(by: MemoryLayout<mach_header_64>.size)
+    for _ in 0..<header.pointee.ncmds {
+        let load = command.loadUnaligned(as: load_command.self)
+        if load.cmd == LC_UUID {
+            return UUID(uuid: command.loadUnaligned(as: uuid_command.self).uuid).uuidString
+        }
+        command = command.advanced(by: Int(load.cmdsize))
+    }
+    return nil
+}
 
 public struct DaemonRequest: Codable {
     public var build: String

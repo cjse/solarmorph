@@ -99,6 +99,9 @@ func runLampCommand(_ command: LampCommand, _ args: [String]) async throws {
             return
         }
         log("The daemon did not start. Using a direct connection.")
+    } else if DaemonClient.isRunning {
+        // The lamp ignores a second session, so a direct connection needs the session of the daemon.
+        if (try? await DaemonClient.stop()) == true { log("Stopped the daemon, which held the lamp session.") }
     }
 
     var config = try MorphConfig.load()
@@ -276,7 +279,7 @@ func run() async throws {
         default:
             let environment = ProcessInfo.processInfo.environment["SOLARMORPH_IDLE"]
             let idle = try (takeOption("--idle") ?? environment).flatMap(Double.init) ?? 60
-            try await DaemonServer.run(idle: max(idle, 5))
+            try await DaemonServer.run(idle: idle)
         }
 
     case "help", "--help", "-h":

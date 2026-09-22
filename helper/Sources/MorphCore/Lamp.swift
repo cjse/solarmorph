@@ -123,16 +123,25 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     /// The attribute channel already reports daylight mode and the presets. From
     /// here on, `state(fresh: false)` needs no round trip to the lamp.
     public func enableLiveState(seed: LampState? = nil) async throws {
-        for uuid in LampState.liveCharacteristics {
-            let _: Bool = try await wait("notify:\(uuid)", timeout: 5) {
-                self.peripheral?.setNotifyValue(true, for: try self.characteristic(uuid))
-            }
-        }
         let initial: LampState
         if let seed { initial = seed } else { initial = try await readState(attributes: true) }
+        // The copy exists before the subscription, so that no notification is lost.
         try await onQueue {
             guard self.authenticated else { return }
             self.cache = initial
+        }
+        do {
+            for uuid in LampState.liveCharacteristics {
+                let _: Bool = try await wait("notify:\(uuid)", timeout: 5) {
+                    self.peripheral?.setNotifyValue(true, for: try self.characteristic(uuid))
+                }
+            }
+            // A value that changed before the subscription has no notification, for
+            // example the end of a ramp. Read again: each read goes into the copy.
+            _ = try await readState(attributes: false)
+        } catch {
+            try? await onQueue { self.cache = nil }
+            throw error
         }
         log("The live state is on")
     }
@@ -368,6 +377,8 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         guard status == 0 else {
             throw MorphError.protocolError("The lamp refused attribute 0x\(String(attribute, radix: 16)) with status \(status).")
         }
+        // The acknowledgement is certain. A report of the change is possibly not, so do not wait for one.
+        try await onQueue { self.updateLive { $0.apply(attribute: attribute, value: value) } }
     }
 
     /// A control write, kept `minWriteGap` behind the previous one.

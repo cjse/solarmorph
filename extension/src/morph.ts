@@ -1,12 +1,4 @@
-import {
-  environment,
-  getPreferenceValues,
-  launchCommand,
-  LaunchType,
-  showHUD,
-  showToast,
-  Toast,
-} from "@raycast/api";
+import { environment, getPreferenceValues, launchCommand, LaunchType, showHUD, showToast, Toast } from "@raycast/api";
 import { execFile, spawn } from "node:child_process";
 import path from "node:path";
 
@@ -36,9 +28,7 @@ export const isLiveAvailable = () => keepAliveSeconds() !== "0";
 
 function helperEnvironment(): NodeJS.ProcessEnv {
   const seconds = keepAliveSeconds();
-  return seconds === "0"
-    ? { ...process.env, SOLARMORPH_DIRECT: "1" }
-    : { ...process.env, SOLARMORPH_IDLE: seconds };
+  return seconds === "0" ? { ...process.env, SOLARMORPH_DIRECT: "1" } : { ...process.env, SOLARMORPH_IDLE: seconds };
 }
 
 // The lamp accepts one connection at a time, so calls go one after the other.

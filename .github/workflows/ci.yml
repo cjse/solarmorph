@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  helper:
+    name: Swift helper
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test
+        working-directory: helper
+        run: swift test
+
+  extension:
+    name: Raycast extension
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - run: npm ci
+      - name: Lint
+        run: npx ray lint
+      # The build also checks the types. It does not need the Swift helper.
+      - name: Build
+        run: npx ray build -e dist -o "$RUNNER_TEMP/build" -I

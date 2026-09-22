@@ -1,4 +1,4 @@
-import { Action, ActionPanel, Color, Icon, launchCommand, LaunchType, List } from "@raycast/api";
+import { Action, ActionPanel, Color, Icon, launchCommand, LaunchType, List, Keyboard } from "@raycast/api";
 import { useEffect, useState } from "react";
 import { isLiveAvailable, isNotPaired, LampState, morph, Preset, showLampFailure, watchLamp } from "./morph";
 
@@ -33,7 +33,8 @@ export default function Lamp() {
       // on/off/toggle do not report the attributes, so keep the known ones. A full
       // reply omits `preset` when no preset is active, so do not keep the old one then.
       setState((previous) => {
-        const attributes = next.daylight === undefined ? { daylight: previous?.daylight, preset: previous?.preset } : {};
+        const attributes =
+          next.daylight === undefined ? { daylight: previous?.daylight, preset: previous?.preset } : {};
         return { ...attributes, ...next, ...expected };
       });
     } catch (error) {
@@ -84,7 +85,7 @@ export default function Lamp() {
     <Action
       title="Refresh"
       icon={Icon.ArrowClockwise}
-      shortcut={{ modifiers: ["cmd"], key: "r" }}
+      shortcut={Keyboard.Shortcut.Common.Refresh}
       onAction={refreshState}
     />
   );

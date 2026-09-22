@@ -115,8 +115,11 @@
     "@raycast/api": "^2.4.1"
   },
   "devDependencies": {
+    "@raycast/eslint-config": "^2.2.0",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
+    "eslint": "^9.39.5",
+    "prettier": "^3.9.8",
     "typescript": "^5.9.0"
   },
   "scripts": {
@@ -125,6 +128,8 @@
     "dev": "ray develop",
     "prebuild": "npm run build:native",
     "build": "ray build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "ray lint",
+    "fix-lint": "ray lint --fix"
   }
 }

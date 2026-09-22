@@ -29,6 +29,15 @@ public let buildId: String = {
 public struct DaemonRequest: Codable {
     public var build: String
     public var args: [String]
+    /// The idle limit that the client wants, in seconds. The daemon takes it from
+    /// each request, so that a changed preference applies without a restart.
+    public var idle: TimeInterval?
+
+    init(args: [String]) {
+        build = buildId
+        self.args = args
+        idle = ProcessInfo.processInfo.environment["SOLARMORPH_IDLE"].flatMap(TimeInterval.init)
+    }
 }
 
 public struct DaemonReply: Codable {
@@ -145,7 +154,7 @@ public enum DaemonClient {
 
     static func exchange(_ args: [String], on descriptor: Int32) throws -> DaemonReply {
         defer { close(descriptor) }
-        writeLine(try JSONEncoder().encode(DaemonRequest(build: buildId, args: args)), to: descriptor)
+        writeLine(try JSONEncoder().encode(DaemonRequest(args: args)), to: descriptor)
         var reader = LineReader(descriptor)
         guard let line = reader.next() else {
             throw MorphError.bluetooth("The daemon closed the connection without a reply. See \(DaemonPaths.log).")
@@ -223,7 +232,7 @@ public enum DaemonClient {
                 defer { close(descriptor) }
                 // A watch is quiet for as long as the lamp does not change.
                 setReceiveTimeout(descriptor, seconds: 0)
-                writeLine(try JSONEncoder().encode(DaemonRequest(build: buildId, args: ["watch"])), to: descriptor)
+                writeLine(try JSONEncoder().encode(DaemonRequest(args: ["watch"])), to: descriptor)
 
                 var reader = LineReader(descriptor)
                 var restart = false
@@ -257,7 +266,7 @@ public enum DaemonClient {
 /// the live state to the watchers.
 actor LampSession {
     private let lamp = Lamp()
-    private let idle: TimeInterval
+    private var idle: TimeInterval
     private let log: (String) -> Void
     private let shutdown: @Sendable () -> Void
     private var poweredOn = false
@@ -273,10 +282,17 @@ actor LampSession {
     private var sessionUp = false
 
     init(idle: TimeInterval, log: @escaping (String) -> Void, shutdown: @escaping @Sendable () -> Void) {
-        self.idle = idle
+        self.idle = max(idle, DaemonServer.minimumIdle)
         self.log = log
         self.shutdown = shutdown
         lamp.log = log
+    }
+
+    func setIdle(_ seconds: TimeInterval) {
+        let limit = max(seconds, DaemonServer.minimumIdle)
+        guard limit != idle else { return }
+        log("The idle limit is now \(Int(limit)) s")
+        idle = limit
     }
 
     func start() {
@@ -443,6 +459,8 @@ extension MorphError {
 }
 
 public enum DaemonServer {
+    public static let minimumIdle: TimeInterval = 5
+
     /// Run the daemon. This function does not return.
     public static func run(idle: TimeInterval) async throws -> Never {
         let started = Date()
@@ -510,6 +528,9 @@ public enum DaemonServer {
                           let request = try? JSONDecoder().decode(DaemonRequest.self, from: line) else {
                         close(client)
                         return
+                    }
+                    if request.build == ownBuild, let idle = request.idle {
+                        await session.setIdle(idle)
                     }
                     if request.build == ownBuild, request.args == ["watch"] {
                         log("→ watch")

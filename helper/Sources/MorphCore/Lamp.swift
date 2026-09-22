@@ -428,6 +428,8 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     private func wait<T>(_ key: String, timeout: TimeInterval, _ start: @escaping () throws -> Void) async throws -> T {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, Error>) in
             queue.async {
+                // One waiter for each key. A replaced waiter must not wait forever.
+                self.fail(key, MorphError.protocolError("A second wait for \(key) replaced this one."))
                 self.nextPendingId += 1
                 let id = self.nextPendingId
                 self.pending[key] = Pending(

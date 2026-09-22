@@ -95,3 +95,39 @@ final class VectorTests: XCTestCase {
         XCTAssertEqual(lumensToPercent(550), 50)
     }
 }
+
+final class FramingTests: XCTestCase {
+    func testAssemblerDropsAMessageWithALostFragment() {
+        let fragments = fragmentMessage(type: MsgType.reauthPayloadB, payload: Data(repeating: 7, count: 60))
+        XCTAssertEqual(fragments.count, 4)
+
+        var assembler = MessageAssembler()
+        XCTAssertNil(assembler.push(fragments[0]))
+        XCTAssertNil(assembler.push(fragments[2]), "fragment 1 is missing")
+        XCTAssertNil(assembler.push(fragments[3]))
+
+        // The next complete message is not affected.
+        var message: DysonMessage?
+        for fragment in fragments { message = assembler.push(fragment) }
+        XCTAssertEqual(message?.payload, Data(repeating: 7, count: 60))
+    }
+}
+
+final class ConfigTests: XCTestCase {
+    func testSaveIsPrivateAndLoads() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("config.json").path
+        setenv("SOLARMORPH_CONFIG", path, 1)
+        defer { unsetenv("SOLARMORPH_CONFIG") }
+
+        let config = MorphConfig(serial: "E5S-EU-TEST", accountId: "12345678-90ab-cdef-1234-567890abcdef", ltk: "00ff")
+        try config.save()
+        try config.save()  // Replace the file.
+
+        let mode = try FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? Int
+        XCTAssertEqual(mode, 0o600)
+        XCTAssertEqual(try MorphConfig.load().serial, "E5S-EU-TEST")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), ["config.json"])
+    }
+}

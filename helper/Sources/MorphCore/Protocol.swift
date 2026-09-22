@@ -178,9 +178,14 @@ public struct MessageAssembler {
             received = 1
             buffer = Data(body.dropFirst())
         } else {
-            guard expected > 0 else { return nil }
+            // A continuation must be the next fragment. After a lost fragment, drop the
+            // message: the waiter then times out, and the handshake tries again.
+            guard expected > 0, Int(header & 0x7F) == received else {
+                self = MessageAssembler()
+                return nil
+            }
             buffer.append(contentsOf: body)
-            received = Int(header & 0x7F) + 1
+            received += 1
         }
 
         guard received >= expected else { return nil }

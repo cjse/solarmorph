@@ -25,15 +25,16 @@ Raycast commands:
 The first command takes approximately 3 seconds, because it connects and does
 the handshake. A background process then holds the connection, and a subsequent
 command takes approximately 0.4 seconds. The process stops after 1 minute
-without a command and without an open Lamp Controls list. The extension preference "Keep the Connection Open" changes
-this time or switches the background process off.
+without a command and without an open Lamp Controls list. The extension
+preference "Keep the Connection Open" changes this time or switches the
+background process off. A changed preference applies to the next command.
 
 While the background process holds the connection, the MyDyson app cannot
 connect to the lamp. Run **Disconnect Lamp** first, or wait for the idle limit.
 
 ## Status
 
-Version 0.3.0 is an early release. It was tested with one Solarcycle Morph desk
+Version 0.4.0 is an early release. It was tested with one Solarcycle Morph desk
 lamp, on one Mac with Apple silicon.
 
 - Tested on the lamp: the pairing and all the commands.
@@ -132,7 +133,8 @@ each change, until Ctrl-C. The background process keeps a live copy of the state
 from the notifications of the lamp, so `status` needs no round trip;
 `status --fresh` reads the lamp. The lamp commands start the
 background process themselves. `morph daemon stop` stops it, and `--direct` makes
-one command use its own connection. With `--direct`, `--verbose` shows each phase
+one command use its own connection (it stops an active background process first,
+because the lamp accepts one session). With `--direct`, `--verbose` shows each phase
 of the connection with its time. The log of the background process is
 `~/.config/solarmorph/daemon.log`. `scan` lists the Bluetooth LE devices nearby; the
 lamp shows with its serial number as its name.
@@ -142,8 +144,8 @@ lamp shows with its serial number as its name.
 - **"Could not connect"**: close the MyDyson app, and stop all other systems
   that control the lamp (Homebridge, Home Assistant). Then try again.
 - **"The lamp accepted the connection but did not answer the handshake"**: a
-  different program has the session. On the same Mac, this is frequently a second
-  `morph` process, for example `--direct` while the background process is active.
+  different program or device has the session, for example the MyDyson app,
+  Homebridge, or Home Assistant. Close it, then try again.
 - **The lamp refuses all connections** although it shows in `morph scan`: remove
   the power of the lamp for ten seconds. The reference project documents this
   lamp state.
@@ -184,7 +186,8 @@ Bluetooth permission of Raycast and no launchd service is necessary. A process
 from an old build stops when a new build talks to it.
 
 The unit tests (`swift test` in `helper/`) check the crypto and the framing
-against the vectors of the reference implementation.
+against the vectors of the reference implementation, and the socket protocol of
+the background process. `npm run lint` in `extension/` runs ESLint and Prettier.
 
 To make a release package: `scripts/package-release.sh`. This needs the full
 Xcode for the universal binary.

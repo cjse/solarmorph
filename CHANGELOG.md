@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.0 - 2026-09-22
+
+- The live state is correct from the start. Before, a change during the first
+  seconds of the background process, for example the end of a brightness ramp,
+  could stay out of the live copy.
+- A daylight or preset change goes into the live state as soon as the lamp
+  acknowledges it.
+- The preference "Never (slower commands)" works while a background process is
+  active. Before, the commands failed until that process stopped. A changed
+  idle time applies to the next command.
+- Lamp Controls shows "Could not reach the lamp" with a Refresh action when the
+  first load fails, and says when the list no longer follows the lamp. The
+  power action switches the lamp to the state that its title shows.
+- The background process is more robust: a client that stops reading cannot
+  block it, it does not stop in the middle of a command at its idle limit, and
+  it skips a command whose client gave up. The helper from the terminal and the
+  helper in Raycast share one background process when they are the same build.
+- The pairing sends a real locale to Dyson (for example `en-GB`), and the
+  command-line pairing suggests the region of the Mac.
+- Smaller fixes: a failed scan stops, a lost Bluetooth fragment makes the
+  handshake try again, and the configuration file is written atomically.
+
 ## 0.3.0 - 2026-09-21
 
 - The background process follows the notifications of the lamp and keeps a live

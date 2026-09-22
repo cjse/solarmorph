@@ -4,7 +4,7 @@ import MorphCore
 let usage = """
     Usage: morph [--json] [--verbose] [--direct] <command>
 
-      pair [--country SE] [--email you@example.com] [--serial ABC-EU-...]
+      pair [--country GB] [--email you@example.com] [--serial ABC-EU-...]
                           Get the lamp key from the Dyson account (one time)
       pair-begin | pair-complete | pair-save
                           The same pairing in three steps without prompts, for the
@@ -125,7 +125,9 @@ func runLampCommand(_ command: LampCommand, _ args: [String]) async throws {
 
 @MainActor
 func pair() async throws {
-    let country = try takeOption("--country") ?? { let c = prompt("Country code [SE]: "); return c.isEmpty ? "SE" : c }()
+    // The region of the system locale, for example `SE` from `en_SE`.
+    let region = Locale.current.region?.identifier ?? "GB"
+    let country = try takeOption("--country") ?? { let c = prompt("Country code [\(region)]: "); return c.isEmpty ? region : c }()
     let email = try takeOption("--email") ?? prompt("Dyson account email: ")
     let password = getpass("Dyson account password: ").map { String(cString: $0) } ?? ""
     guard !password.isEmpty, !email.isEmpty else {

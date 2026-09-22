@@ -165,6 +165,11 @@ export async function quick(args: string[], done: (state: LampState) => string) 
 }
 
 export function parseNumber(value: string, min: number, max: number): number | undefined {
-  const number = Number(value.replace(/[%kK\s]/g, ""));
+  const digits = value.replace(/[%kK\s]/g, "");
+  // Number("") is 0, so an argument of only "%" must not become 0.
+  if (!digits) {
+    return undefined;
+  }
+  const number = Number(digits);
   return Number.isInteger(number) && number >= min && number <= max ? number : undefined;
 }

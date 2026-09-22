@@ -1,5 +1,5 @@
 import { Action, ActionPanel, Color, Icon, launchCommand, LaunchType, List } from "@raycast/api";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { isLiveAvailable, isNotPaired, LampState, morph, Preset, showLampFailure, watchLamp } from "./morph";
 
 const BRIGHTNESS_STEPS = [1, 10, 25, 50, 75, 100];
@@ -21,7 +21,8 @@ export default function Lamp() {
   const [notPaired, setNotPaired] = useState(false);
   // A new number starts the watch again, after the background process closed it.
   const [watchRun, setWatchRun] = useState(0);
-  const watching = useRef(false);
+  // True while the watch is open, so that the list follows the lamp.
+  const [live, setLive] = useState(false);
 
   // `expected` holds the values that were just written. The lamp ramps to a new
   // value, so the value that it reports immediately after a write is not the target.
@@ -50,7 +51,7 @@ export default function Lamp() {
       run(["status"]);
       return;
     }
-    watching.current = true;
+    setLive(true);
     return watchLamp({
       onState: (next) => {
         setState(next);
@@ -63,7 +64,7 @@ export default function Lamp() {
         showLampFailure(error);
       },
       onEnd: () => {
-        watching.current = false;
+        setLive(false);
         setIsLoading(false);
       },
     });
@@ -72,7 +73,7 @@ export default function Lamp() {
   // Read the lamp, and not the live copy. Start the watch again if it ended.
   async function refreshState() {
     await run(["status", "--fresh"]);
-    if (isLiveAvailable() && !watching.current) {
+    if (isLiveAvailable() && !live) {
       setWatchRun((count) => count + 1);
     }
   }
@@ -106,9 +107,20 @@ export default function Lamp() {
           }
         />
       )}
+      {!state && !notPaired && !isLoading && (
+        <List.EmptyView
+          icon={Icon.LightBulbOff}
+          title="Could not reach the lamp"
+          description="Close the MyDyson app, and make sure that the lamp has power and is near this Mac. Then refresh."
+          actions={<ActionPanel>{refresh}</ActionPanel>}
+        />
+      )}
       {state && (
         <>
-          <List.Section title="Light">
+          <List.Section
+            title="Light"
+            subtitle={isLiveAvailable() && !live ? "Not live · Refresh to follow the lamp again" : undefined}
+          >
             <List.Item
               title="Power"
               icon={{ source: Icon.LightBulb, tintColor: state.power ? Color.Yellow : Color.SecondaryText }}
@@ -118,7 +130,8 @@ export default function Lamp() {
                   <Action
                     title={state.power ? "Turn off" : "Turn on"}
                     icon={Icon.Power}
-                    onAction={() => run(["toggle"])}
+                    // The title promises a direction, so do not toggle a state that is possibly old.
+                    onAction={() => run([state.power ? "off" : "on"])}
                   />
                   {refresh}
                 </ActionPanel>

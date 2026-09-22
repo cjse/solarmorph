@@ -94,8 +94,9 @@ public struct LampCommand {
         }
         // After a write, read the lamp: it is not known that the lamp sends a
         // notification for each value that this client wrote. setPower reads the
-        // power itself. With the live state, the attributes come from the reports
-        // of the lamp, so the five characteristics are sufficient here.
+        // power itself. With the live state, an acknowledged attribute write goes
+        // into the live copy, and the reports of the lamp add the other attribute
+        // changes, so the five characteristics are sufficient here.
         let wrote = ramps || autoBrightness != nil || movement != nil
         let live = await lamp.isLive
         return try await lamp.state(attributes: readsAttributes && !(live && wrote), fresh: fresh || wrote)

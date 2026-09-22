@@ -36,10 +36,27 @@ public struct MorphConfig: Codable {
             attributes: [.posixPermissions: 0o700])
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        // Create the file with its final mode, so the key is never world-readable.
         let data = try encoder.encode(self)
-        FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600])
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-        try data.write(to: url)
+
+        // Write a new file and rename it, so that a reader (the daemon, or a
+        // second command) never sees a partial file. The new file has its final
+        // mode from the start, so the key is never readable by other users.
+        let temporary = url.path + ".tmp-\(getpid())"
+        unlink(temporary)
+        let descriptor = open(temporary, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        guard descriptor >= 0 else {
+            throw MorphError.usage("Could not write \(temporary): \(String(cString: strerror(errno)))")
+        }
+        do {
+            let file = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+            try file.write(contentsOf: data)
+            try file.close()
+            guard rename(temporary, url.path) == 0 else {
+                throw MorphError.usage("Could not replace \(url.path): \(String(cString: strerror(errno)))")
+            }
+        } catch {
+            unlink(temporary)
+            throw error
+        }
     }
 }

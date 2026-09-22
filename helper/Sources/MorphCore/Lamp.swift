@@ -105,9 +105,21 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
         }
 
         log("Scanning for \(serial)")
-        let found: CBPeripheral = try await wait("find", timeout: 15) {
-            self.scanTarget = serial.uppercased()
-            self.central.scanForPeripherals(withServices: nil)
+        let found: CBPeripheral
+        do {
+            found = try await wait("find", timeout: 15) {
+                self.scanTarget = serial.uppercased()
+                self.central.scanForPeripherals(withServices: nil)
+            }
+        } catch {
+            // Stop the scan, so that it does not continue in the daemon.
+            try? await onQueue {
+                self.central.stopScan()
+                self.scanTarget = nil
+            }
+            guard case MorphError.timeout = error else { throw error }
+            throw MorphError.bluetooth(
+                "Could not find \(serial) nearby. Make sure that the lamp has power and that no other device holds the connection.")
         }
         if try await connectAndAuthenticate(found, attempts: 3, accountId: accountId, key: key) {
             return found.identifier

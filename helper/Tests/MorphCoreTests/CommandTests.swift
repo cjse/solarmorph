@@ -36,3 +36,11 @@ final class CommandTests: XCTestCase {
         XCTAssertNil(decoded.state)
     }
 }
+
+final class CloudTests: XCTestCase {
+    func testCulture() {
+        XCTAssertEqual(DysonCloud.culture(for: "DE"), "de-DE")
+        XCTAssertEqual(DysonCloud.culture(for: "GB"), "en-GB")
+        XCTAssertEqual(DysonCloud(country: "se").culture, "en-SE")
+    }
+}

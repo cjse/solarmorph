@@ -23,7 +23,14 @@ public struct DysonCloud {
 
     public init(country: String, culture: String? = nil) {
         self.country = country.uppercased()
-        self.culture = culture ?? "\(country.lowercased())-\(country.uppercased())"
+        self.culture = culture ?? Self.culture(for: self.country)
+    }
+
+    /// Dyson wants a BCP 47 culture. The country code is not a language code
+    /// (`GB`, `US`), so use English except where the reference project knows better.
+    static func culture(for country: String) -> String {
+        let languages = ["DE": "de", "AT": "de", "CH": "de", "FR": "fr", "IT": "it", "ES": "es", "NL": "nl"]
+        return "\(languages[country] ?? "en")-\(country)"
     }
 
     /// Start a login. Dyson emails a one-time code.

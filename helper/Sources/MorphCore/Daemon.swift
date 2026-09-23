@@ -17,6 +17,28 @@ public enum DaemonPaths {
     public static var socket: String { directory.appendingPathComponent("daemon.sock").path }
     public static var lock: String { directory.appendingPathComponent("daemon.lock").path }
     public static var log: String { directory.appendingPathComponent("daemon.log").path }
+    /// The previous log. The daemon moves the log here when it is larger than `logLimit`.
+    public static var oldLog: String { log + ".1" }
+    public static let logLimit = 1_000_000
+}
+
+/// Move a log that is larger than `limit` to `oldLog`, and replace an older one there.
+///
+/// - Returns: true when it moved the log.
+@discardableResult
+func rotateLog(_ log: String, to oldLog: String, limit: Int) -> Bool {
+    guard let size = (try? FileManager.default.attributesOfItem(atPath: log))?[.size] as? Int, size > limit else {
+        return false
+    }
+    return rename(log, oldLog) == 0
+}
+
+/// True when the standard error of this process writes to the file at `path`.
+func standardErrorIs(_ path: String) -> Bool {
+    var own = stat()
+    var file = stat()
+    guard fstat(STDERR_FILENO, &own) == 0, stat(path, &file) == 0 else { return false }
+    return own.st_dev == file.st_dev && own.st_ino == file.st_ino
 }
 
 /// Identifies the binary. A daemon from a different build stops when a new build talks to it.
@@ -233,7 +255,8 @@ public enum DaemonClient {
         guard let executable = Bundle.main.executableURL else { return nil }
         try? FileManager.default.createDirectory(
             at: DaemonPaths.directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        FileManager.default.createFile(atPath: DaemonPaths.log, contents: nil, attributes: [.posixPermissions: 0o600])
+        // Append, so that the log keeps the history of the earlier daemons. The daemon limits the size.
+        let log = Darwin.open(DaemonPaths.log, O_WRONLY | O_CREAT | O_APPEND, 0o600)
 
         let process = Process()
         process.executableURL = executable
@@ -242,7 +265,7 @@ public enum DaemonClient {
         // waits for the end of the output then waits for the daemon.
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle(forWritingAtPath: DaemonPaths.log) ?? FileHandle.nullDevice
+        process.standardError = log >= 0 ? FileHandle(fileDescriptor: log, closeOnDealloc: true) : FileHandle.nullDevice
         guard (try? process.run()) != nil else { return nil }
 
         // A daemon that stops holds the lock until it has given the lamp back,
@@ -579,6 +602,20 @@ public enum DaemonServer {
             log("A different daemon holds the lock. Stopping.")
             exit(0)
         }
+
+        // Only the daemon that has the lock changes the log, so two daemons cannot both move it.
+        // A daemon that a person started in a terminal writes to the terminal, so leave the file alone.
+        if standardErrorIs(DaemonPaths.log),
+            rotateLog(DaemonPaths.log, to: DaemonPaths.oldLog, limit: DaemonPaths.logLimit)
+        {
+            let fresh = Darwin.open(DaemonPaths.log, O_WRONLY | O_CREAT | O_APPEND, 0o600)
+            if fresh >= 0 {
+                dup2(fresh, STDERR_FILENO)
+                Darwin.close(fresh)
+            }
+        }
+        let date = ISO8601DateFormatter.string(from: started, timeZone: .current, formatOptions: [.withInternetDateTime])
+        FileHandle.standardError.write(Data("\n=== Daemon \(getpid()) started \(date) ===\n".utf8))
 
         // Leave the session of the process that started the daemon, so that the
         // end of that process or of its terminal does not stop the daemon.

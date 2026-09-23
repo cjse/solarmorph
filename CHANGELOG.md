@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- When the Bluetooth of the lamp stops working correctly, the error says to
+  remove the power of the lamp for ten seconds. The helper also stops after the
+  first such answer. Before, it tried up to five connections and a scan, and
+  then showed a general connection error.
+- The helper turns off its notifications before it disconnects. The lamp must
+  forget them at the end of the link, but it possibly keeps some state for
+  each one.
+- The log of the background process, `~/.config/solarmorph/daemon.log`, keeps
+  the earlier runs. Each run starts with a line that has the date, and the log
+  shows each disconnect. When the log is larger than 1 MB, the background
+  process moves it to `daemon.log.1`.
+
 ## 0.4.0 - 2026-09-22
 
 - The live state is correct from the start. Before, a change during the first

@@ -256,9 +256,34 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
 
     public func disconnect() async {
         guard let peripheral, peripheral.state != .disconnected else { return }
+        await unsubscribeAll()
         let _: Bool? = try? await wait("disconnect", timeout: 3) {
             self.central.cancelPeripheralConnection(peripheral)
         }
+    }
+
+    /// Turn off all notifications before a planned disconnect.
+    ///
+    /// The lamp must forget them when the link ends, but a small Bluetooth stack
+    /// possibly keeps some state for each one. macOS also keeps the link open
+    /// while a different process uses the lamp, and then the lamp keeps sending.
+    private func unsubscribeAll() async {
+        let subscribed = (try? await onQueue { () -> [CBCharacteristic] in
+            guard self.peripheral?.state == .connected else { return [] }
+            return self.chars.values.filter(\.isNotifying)
+        }) ?? []
+        for characteristic in subscribed {
+            let uuid = characteristic.uuid.uuidString
+            let done: Bool? = try? await wait("notify:\(uuid)", timeout: 2) {
+                self.peripheral?.setNotifyValue(false, for: characteristic)
+            }
+            // A lamp that does not answer here does not answer the next one either.
+            guard done != nil else {
+                log("The lamp did not turn off the notifications of \(uuid)")
+                return
+            }
+        }
+        if !subscribed.isEmpty { log("Turned off \(subscribed.count) notifications") }
     }
 
     // MARK: - Connect and handshake
@@ -278,13 +303,21 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
                 try await authenticate(accountId: accountId, key: key)
                 return true
             } catch let error as MorphError {
-                // A wrong key does not get better with another attempt.
+                // A wrong key does not get better with another attempt, and a stuck lamp
+                // does not either. More connections only give a stuck lamp more work.
                 if case .protocolError = error { throw error }
+                if case .lampStuck = error {
+                    log("Attempt \(attempt) failed: \(error)")
+                    await unsubscribeAll()
+                    try? await onQueue { self.central.cancelPeripheralConnection(target) }
+                    throw error
+                }
                 if case .timeout(let key) = error, key.hasPrefix("msg:") { silent += 1 }
                 log("Attempt \(attempt) failed: \(error)")
             } catch {
                 log("Attempt \(attempt) failed: \(error.localizedDescription)")
             }
+            await unsubscribeAll()
             try? await onQueue { self.central.cancelPeripheralConnection(target) }
             try await Task.sleep(nanoseconds: UInt64(attempt) * 700_000_000)
         }
@@ -525,6 +558,7 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     }
 
     public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        log("Disconnected\(error.map { ": \($0.localizedDescription)" } ?? "")")
         authenticated = false
         cache = nil
         onDisconnect?()
@@ -562,7 +596,7 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     public func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
         let key = "notify:\(characteristic.uuid.uuidString)"
         if let error {
-            fail(key, MorphError.bluetooth("Subscription failed: \(error.localizedDescription)"))
+            fail(key, Self.failure("Subscription failed", error))
         } else {
             resolve(key, true)
         }
@@ -571,7 +605,7 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     public func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         let key = "write:\(characteristic.uuid.uuidString)"
         if let error {
-            fail(key, MorphError.bluetooth("Write failed: \(error.localizedDescription)"))
+            fail(key, Self.failure("Write failed", error))
         } else {
             resolve(key, true)
         }
@@ -584,7 +618,7 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
     public func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         let uuid = characteristic.uuid.uuidString
         if let error {
-            fail("read:\(uuid)", MorphError.bluetooth("Read failed: \(error.localizedDescription)"))
+            fail("read:\(uuid)", Self.failure("Read failed", error))
             return
         }
         guard let data = characteristic.value else { return }
@@ -613,6 +647,20 @@ public final class Lamp: NSObject, CBCentralManagerDelegate, CBPeripheralDelegat
             updateLive { $0.apply(characteristic: uuid, value: data) }
             resolve("read:\(uuid)", data)
         }
+    }
+
+    /// The error for a failed operation on a characteristic that discovery found.
+    ///
+    /// For such a characteristic, a working lamp does not answer "attribute not
+    /// found" or "insufficient resources". On 2026-09-23 the lamp answered both for
+    /// each characteristic until a power cycle.
+    static func failure(_ operation: String, _ error: Error) -> MorphError {
+        let error = error as NSError
+        let stuck: [CBATTError.Code] = [.attributeNotFound, .insufficientResources]
+        if error.domain == CBATTErrorDomain, stuck.contains(where: { $0.rawValue == error.code }) {
+            return .lampStuck("\(operation.lowercased()): \(error.localizedDescription)")
+        }
+        return .bluetooth("\(operation): \(error.localizedDescription)")
     }
 
     private func updateLive(_ change: (inout LampState) -> Bool) {

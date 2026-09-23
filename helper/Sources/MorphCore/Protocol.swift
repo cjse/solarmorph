@@ -12,6 +12,9 @@ public enum MorphError: Error, CustomStringConvertible {
     case cloud(String)
     case notPaired
     case usage(String)
+    /// The lamp answered with an ATT error that a working lamp does not send.
+    /// Another attempt does not help; only a power cycle of the lamp does.
+    case lampStuck(String)
 
     public var description: String {
         switch self {
@@ -20,6 +23,9 @@ public enum MorphError: Error, CustomStringConvertible {
             return message
         case .notPaired:
             return "No lamp credentials found. Run `morph pair` first."
+        case .lampStuck(let detail):
+            return "The Bluetooth of the lamp does not work correctly (\(detail)). "
+                + "Remove the power of the lamp for ten seconds, then try again."
         }
     }
 }

@@ -149,6 +149,10 @@ lamp shows with its serial number as its name.
 - **The lamp refuses all connections** although it shows in `morph scan`: remove
   the power of the lamp for ten seconds. The reference project documents this
   lamp state.
+- **"The Bluetooth of the lamp does not work correctly"**: the lamp accepts the
+  connection, but it answers that it has no resources or cannot find its own
+  characteristics. Remove the power of the lamp for ten seconds. If this occurs
+  again, open an issue and attach `~/.config/solarmorph/daemon.log`.
 - **"Bluetooth permission denied"**: allow Raycast (or your terminal app) in
   System Settings > Privacy & Security > Bluetooth.
 - **The brightness is not the value that you set**: with auto brightness on, the

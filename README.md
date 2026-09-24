@@ -34,7 +34,7 @@ connect to the lamp. Run **Disconnect Lamp** first, or wait for the idle limit.
 
 ## Status
 
-Version 0.4.0 is an early release. It was tested with one Solarcycle Morph desk
+Version 0.4.1 is an early release. It was tested with one Solarcycle Morph desk
 lamp, on one Mac with Apple silicon.
 
 - Tested on the lamp: the pairing and all the commands.

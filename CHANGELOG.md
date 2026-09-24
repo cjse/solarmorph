@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.1 - 2026-09-24
 
 - When the Bluetooth of the lamp stops working correctly, the error says to
   remove the power of the lamp for ten seconds. The helper also stops after the
